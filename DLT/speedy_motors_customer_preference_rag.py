@@ -33,13 +33,13 @@ fe = feature_engineering.FeatureEngineeringClient()
 # COMMAND ----------
 
 # variables
-catalog_name = "speedy_motors"
-schema_name = "salesforce"
+catalog_name = "digan"
+schema_name = "speedy_motors"
 
 spark.sql(f"USE CATALOG {catalog_name}")
 spark.sql(f"USE SCHEMA {schema_name}")
 
-product_feature_table = f"{catalog_name}.{schema_name}.updated_product_table"
+product_feature_table = f"{catalog_name}.{schema_name}.car_360"
 
 # COMMAND ----------
 
@@ -57,10 +57,10 @@ client = mlflow.deployments.get_deploy_client("databricks")
 
 template = '''Given a car's specifications, write a short description of the car's benefits, advantages, and the personas that would particularly love this type of car.
         
-Specifications: Price: {MSRP}, Car Type: {Car_Type}, Color: {Color}, Number of Seats: {Seats}, Fuel Type: {Fuel_Type}, Miles-per-gallon: {MPG}, Drive Train Type: {Drive_Train_Type}, Towing Capacity: {Towing_Capacity}
+Specifications: Price: {MSRP}, Car Type: {Car_Type}, Color: {Color}, Number of Seats: {Seats}, Fuel Type: {Fuel_Type}, Miles-per-gallon: {MPG}, Drive Train Type: {Drive_Train_Type}, Towing Capacity: {Towing_Capacity}, Reviews: {Reviews}
 '''
 
-prompt_template = PromptTemplate(input_variables=["MSRP", "Car_Type", "Color", "Seats", "Fuel_Type", "MPG", "Drive_Train_Type", "Towing_Capacity"],
+prompt_template = PromptTemplate(input_variables=["MSRP", "Car_Type", "Color", "Seats", "Fuel_Type", "MPG", "Drive_Train_Type", "Towing_Capacity, Reviews"],
                                  template=template)
 
 @udf("string")
@@ -74,6 +74,7 @@ def get_car_descriptions(*car_features):
     MPG = car_features[5]
     Drive_Train_Type = car_features[6]
     Towing_Capacity = car_features[7]
+    Reviews = car_features[8]
 
     prompt = prompt_template.format(MSRP=MSRP, 
                                     Car_Type=Car_Type, 
@@ -82,7 +83,8 @@ def get_car_descriptions(*car_features):
                                     Fuel_Type=Fuel_Type, 
                                     MPG=MPG,
                                     Drive_Train_Type=Drive_Train_Type,
-                                    Towing_Capacity=Towing_Capacity)
+                                    Towing_Capacity=Towing_Capacity,
+                                    Reviews=Reviews)
 
     messages=[{
                 "role": "system",
@@ -104,7 +106,7 @@ def get_car_descriptions(*car_features):
     )
 
     # return a string of the specs to be included with the LLM-generated description for unstructured search
-    specs_desc = f"Price: {MSRP}, Car Type: {Car_Type}, Color: {Color}, Number of Seats: {Seats}, Fuel Type: {Fuel_Type}, Miles-per-gallon: {MPG}, Drive Train Type: {Drive_Train_Type}, Towing Capacity: {Towing_Capacity}"
+    specs_desc = f"Price: {MSRP}, Car Type: {Car_Type}, Color: {Color}, Number of Seats: {Seats}, Fuel Type: {Fuel_Type}, Miles-per-gallon: {MPG}, Drive Train Type: {Drive_Train_Type}, Towing Capacity: {Towing_Capacity}, Reviews: {Reviews}"
     result = f"{specs_desc}\n\n{completions_response.choices[0]['message']['content']}"
     return result
 
@@ -112,9 +114,9 @@ def get_car_descriptions(*car_features):
 
 product_df = spark.sql(f"select * from {product_feature_table}")
 
-car_features = ["MSRP__c", "Car_Type__c", "Color__c", "Seats__c", "Fuel_Type__c", "MPG__c", "Drive_Train_Type__c", "Towing_Capacity__c"]
-product_descriptions_df = product_df.select("Id", "Name", *car_features, get_car_descriptions(*car_features).alias("automated_description"))\
-                                    .withColumn("MSRP__c", col("MSRP__c").cast("double")) # vector index requires double instead of decimal col type
+car_features = ["car_MSRP", "car_Type", "car_color", "car_seats", "car_fuel_type", "car_mpg", "car_drive_train_type", "car_towing_capacity", "car_review"]
+product_descriptions_df = product_df.select("Id", "car_name", *car_features, get_car_descriptions(*car_features).alias("automated_description"))\
+                                    .withColumn("car_MSRP", col("car_MSRP").cast("double")) # vector index requires double instead of decimal col type
 
 display(product_descriptions_df)
 
@@ -137,7 +139,7 @@ customer_feature_table = fe.create_table(
 
 # MAGIC %sql
 # MAGIC -- enable change data feed on the feature table
-# MAGIC ALTER TABLE speedy_motors.salesforce.product_ft SET TBLPROPERTIES (delta.enableChangeDataFeed=true);
+# MAGIC ALTER TABLE digan.speedy_motors.product_ft SET TBLPROPERTIES (delta.enableChangeDataFeed=true);
 
 # COMMAND ----------
 
@@ -145,11 +147,12 @@ customer_feature_table = fe.create_table(
 
 # COMMAND ----------
 
+# DBTITLE 1,TAKE OUT
 from databricks.vector_search.client import VectorSearchClient
 
 vsc = VectorSearchClient()
 
-vector_search_endpoint_name = "speedy_motors_rag_endpoint"
+vector_search_endpoint_name = "speedy_motors_rag_endpoint_dp"
 
 try:
     vsc.create_endpoint(vector_search_endpoint_name)
@@ -173,11 +176,12 @@ vsc.list_indexes(vector_search_endpoint_name)
 
 # COMMAND ----------
 
+# DBTITLE 1,TAKE OUT
 import pprint
 
 car_suggestion = index.similarity_search(
                             query_text="I go skiing every weekend so I want a car that can get me and all my friends to the mountain pretty easily. Not looking to spend too much money though. Price is not a big deal.",
-                            columns=["Id", "Name", "MSRP__c", "automated_description"],
+                            columns=["Id", "car_name", "car_MSRP", "automated_description"],
                             num_results=2,
                             )
 
@@ -218,7 +222,7 @@ from databricks.vector_search.client import VectorSearchClient
 
 vsc = VectorSearchClient()
 
-vector_search_endpoint_name = "speedy_motors_rag_endpoint"
+vector_search_endpoint_name = "speedy_motors_rag_endpoint_dp"
 feature_table_index = f"{catalog_name}.{schema_name}.speedy_motors_product_feature_index"
 
 index = vsc.get_index(index_name=feature_table_index, endpoint_name=vector_search_endpoint_name)
@@ -254,7 +258,7 @@ from databricks.vector_search.client import VectorSearchClient
 
 # vector search endpoint and index 
 vsc = VectorSearchClient()
-vector_search_endpoint_name = "speedy_motors_rag_endpoint"
+vector_search_endpoint_name = "speedy_motors_rag_endpoint_dp"
 feature_table_index = f"{catalog_name}.{schema_name}.speedy_motors_product_feature_index"
 
 
@@ -319,7 +323,7 @@ buyer_preference = '''I have a customer that goes skiing every weekend so they w
 chain.invoke({"buyer_preference": buyer_preference, 
               "similarity_search_return": index.similarity_search(
                             query_text=buyer_preference,
-                            columns=["Id", "Name", "MSRP__c", "automated_description"],
+                            columns=["Id", "car_name", "car_MSRP", "automated_description"],
                             num_results=2,
                             )})
 

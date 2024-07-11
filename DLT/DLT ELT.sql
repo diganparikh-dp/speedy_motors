@@ -46,6 +46,7 @@ COMMENT "Cleaned car reviews joined with car Salesforce table."
 TBLPROPERTIES ("myCompanyPipeline.quality" = "silver")
 AS
 SELECT 
+  reviews.Id as Id,
   cars.Name__c as car_name, 
   cars.MSRP_c__c as car_MSRP,
   cars.Current_Inventory_c__c as car_current_inventory,
