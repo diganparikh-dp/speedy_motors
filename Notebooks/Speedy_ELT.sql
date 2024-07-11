@@ -94,18 +94,14 @@ ON cars.Name__c = reviews.Car_Name__c
 
 -- COMMAND ----------
 
-CREATE STREAMING LIVE TABLE agg_cars(
-  CONSTRAINT valid_review EXPECT (concat_reviews IS NOT NULL) ON VIOLATION DROP ROW,
-  CONSTRAINT valid_rating EXPECT (average_review_score IS NOT NULL) ON VIOLATION DROP ROW
-)
+CREATE MATERIALIZED VIEW agg_cars
 COMMENT "Cleaned car reviews joined with car Salesforce table."
-TBLPROPERTIES ("myCompanyPipeline.quality" = "silver")
 AS
 SELECT 
   car_name, 
   round(avg(car_rating),2) as average_review_score, 
   array_join(collect_set(car_review), ', ') as concat_reviews
-FROM STREAM(live.car_360)
+FROM live.car_360
 group by car_name
  
 
